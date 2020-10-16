@@ -1,6 +1,7 @@
 ﻿// peParse.cpp : 此文件包含 "main" 函数。程序执行将在此处开始并结束。
 //
 
+#include<Windows.h>
 #include <iostream>
 #include <string>
 using namespace std;
@@ -10,11 +11,10 @@ void pause() {
     std::cin >> c;
 }
 
-char* g_buf;
 
 char* loadFile(string fileName) {
     FILE* file;
-    if (0 != fopen_s(&file, fileName.c_str(), "rb")) {
+    if (0 != fopen_s(&file, fileName.c_str(), "rb") || file ==0) {
         return 0;
     }
 
@@ -33,7 +33,6 @@ char* loadFile(string fileName) {
     return buf;
 }
 
-#include<Windows.h>
 
 IMAGE_DOS_HEADER getDosHead(char* buf) {
     IMAGE_DOS_HEADER head;
@@ -68,6 +67,133 @@ int findSectionHeader(DWORD rva, IMAGE_SECTION_HEADER sectionHeaders[16], int n)
     return -1;
 }
 
+bool checkX64(IMAGE_NT_HEADERS32 &ntHead32) {
+    /*switch (ntHead32.FileHeader.Machine) {
+    case IMAGE_FILE_MACHINE_I386:
+        printf("x86\n");
+        return false;
+    case IMAGE_FILE_MACHINE_AMD64:
+        printf("x64\n");
+        return true;
+    default:
+        printf("error\n");
+        return false;
+    }*/
+
+ /*   ntHead32.OptionalHeader.Magic == 0x010B;
+    ntHead32.OptionalHeader.Magic == 0x020B;*/
+
+    if (0 != (ntHead32.FileHeader.Characteristics & IMAGE_FILE_32BIT_MACHINE)) {
+        printf("x86\n");
+        return false;
+    }
+    else {
+        printf("x64\n");
+        return true;
+    }
+}
+
+DWORD offsetPhyToVa(IMAGE_SECTION_HEADER& section) {
+    section.PointerToRawData;
+    section.VirtualAddress;
+    return section.PointerToRawData - section.VirtualAddress;
+}
+
+wstring getResEntryName(char*buf) {
+    IMAGE_RESOURCE_DIRECTORY_STRING name;
+    
+    memcpy_s(&name, sizeof(name), buf, sizeof(name));
+
+    wchar_t* p = new wchar_t[name.Length+1];
+    p[name.Length] = 0;
+    memcpy_s(p, name.Length * sizeof(wchar_t), buf + sizeof(name.Length), name.Length * sizeof(wchar_t));
+    
+    wstring s =p ;
+    delete[]p;
+    p = NULL;
+    return s;
+}
+
+bool g_bVersion = false;
+
+struct VS_VERSIONINFO {
+    USHORT len;
+    USHORT valueLen;
+    USHORT type;
+    WCHAR key[17];
+    VS_FIXEDFILEINFO value;
+};
+void parseVersion(char* buf) {
+    VS_VERSIONINFO version;
+    memcpy_s(&version, sizeof(version), buf, sizeof(version));
+    if (0 != (version.value.dwFileFlags & VS_FF_DEBUG)) {
+        cout << "Debug\n";
+    }
+    else {
+        cout << "Release\n";
+    }
+}
+
+bool parseResourse(char*buf, DWORD resourceRVA, IMAGE_SECTION_HEADER& section, int level) {
+    //1.rec directory
+    IMAGE_RESOURCE_DIRECTORY direcotry;
+    DWORD d = offsetPhyToVa(section);
+    char *bufPhy = buf + (resourceRVA + d);
+    memcpy_s(&direcotry, sizeof(direcotry), bufPhy, sizeof(direcotry));
+
+    char* bufPhySectionBase = buf + (section.VirtualAddress + d);
+
+    //2.多个 directory entry
+    char * bufPhyEntyrBase = bufPhy + sizeof(direcotry);
+    int count = direcotry.NumberOfIdEntries + direcotry.NumberOfNamedEntries;
+    //cout << "count: "<< count << endl;
+    for (int i = 0; i < count; i++) {
+        IMAGE_RESOURCE_DIRECTORY_ENTRY entry;
+        char *bufPhyEntry = bufPhyEntyrBase + i*sizeof(entry);
+        memcpy_s(&entry, sizeof(entry), bufPhyEntry, sizeof(entry));
+
+        //打印
+        for (int i = 0; i <= level; i++) {
+            //cout << "--";
+        }
+        if (entry.NameIsString == 1) {
+            //wcout << L"name:"<< getResEntryName(bufPhySectionBase + entry.NameOffset) << endl;
+        }
+        else {
+            //cout << "id: " << entry.Id << endl;
+            
+        }
+
+        if (1 == entry.DataIsDirectory) {
+            if (level == 0 && entry.Id == 16) {
+                g_bVersion = true;
+            }
+            parseResourse(buf, section.VirtualAddress + entry.OffsetToDirectory, section, level + 1);
+            if (level == 0 && entry.Id == 16) {
+                g_bVersion = false;
+            }
+        }
+        else {
+            IMAGE_RESOURCE_DATA_ENTRY dataEntry;
+            memcpy_s(&dataEntry, sizeof(dataEntry), bufPhySectionBase + entry.OffsetToData, sizeof(dataEntry));
+            
+
+            if (g_bVersion == true) {
+                parseVersion(buf + entry.OffsetToData);
+            }
+        }
+    }
+    return true;
+}
+
+bool checkDebug(char* buf, DWORD resourceRVA, IMAGE_SECTION_HEADER &section) {
+
+    DWORD offset = offsetPhyToVa(section);
+
+    parseResourse(buf,resourceRVA, section, 0);
+
+    return true;
+}
 
 void parseFile(unique_ptr<char[]> fileBuf) {
     char* bufTmp = fileBuf.get();
@@ -81,21 +207,17 @@ void parseFile(unique_ptr<char[]> fileBuf) {
     int numberOfSections = ntHead32.FileHeader.NumberOfSections;
     DWORD resourceRVA = 0;
 
-    switch (ntHead32.FileHeader.Machine) {
-    case IMAGE_FILE_MACHINE_I386:
-        printf("x86\n");
+    bool bX64 = checkX64(ntHead32);
+    if (false == bX64) {
         bufTmp += sizeof(ntHead32);
         resourceRVA = ntHead32.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
-        break;
-    case IMAGE_FILE_MACHINE_AMD64:
-        printf("x64\n");
+    }
+    else { 
         bufTmp += sizeof(ntHead64);
         resourceRVA = ntHead64.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
-        break;
-    default:
-        printf("error\n");
-        return;
     }
+
+
 
     IMAGE_SECTION_HEADER sectionHeaders[16];
     getSectionHeader(bufTmp, sectionHeaders, numberOfSections);
@@ -106,7 +228,7 @@ void parseFile(unique_ptr<char[]> fileBuf) {
         return;
     }
 
-
+    checkDebug(fileBuf.get(), resourceRVA, sectionHeaders[resSectionIndex] );
 }
 
 int main(int n, char **argv)
