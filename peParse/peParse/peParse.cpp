@@ -197,19 +197,65 @@ bool parseResourse(char* buf, DWORD resourceRVA, IMAGE_SECTION_HEADER& section, 
     return true;
 }
 
-bool checkDebug(char* bufPhyFile, DWORD resourceRVA, IMAGE_SECTION_HEADER& section) {
+bool checkDebug(char* bufPhyFile, DWORD resourceRVA, IMAGE_SECTION_HEADER* sections, int index) {
+    if (index < 0) {
+        return false;
+    }
+    cout << endl;
 
     //DWORD offset = offsetPhyToVa(section);
-
+    IMAGE_SECTION_HEADER section = sections[index];
     parseResourse(bufPhyFile, resourceRVA, section, 0);
 
     return true;
 }
 
-
-bool checkImport(char* bufPhyFile, DWORD importSectionRVA, IMAGE_SECTION_HEADER& section) {
+bool checkExport(char* bufPhyFile, DWORD exportSectionRVA, IMAGE_SECTION_HEADER* sections, int index) {
+    if (index < 0) {
+        return false;
+    }
     cout << endl;
 
+    IMAGE_SECTION_HEADER section = sections[index];
+
+    cout << endl;
+    DWORD offset = offsetPhyToVa(section);
+
+    char* bufPhyExportDirectory = bufPhyFile + (exportSectionRVA + offset);
+    _IMAGE_EXPORT_DIRECTORY *pExportDirectory = (_IMAGE_EXPORT_DIRECTORY*)bufPhyExportDirectory;
+    cout << "[Export DLL: " << (bufPhyFile + (pExportDirectory->Name + offset)) << "]" <<endl;
+    
+    // rva, 指向func 的地址 的数组
+    cout << "func count: " << pExportDirectory->NumberOfFunctions << endl;
+    pExportDirectory->AddressOfFunctions;
+    DWORD* bufFuncAddrS = (DWORD*)(bufPhyFile + (pExportDirectory->AddressOfFunctions + offset));
+    for (int i = 0; i < pExportDirectory->NumberOfFunctions; i++, bufFuncAddrS++) {
+        cout << "func addr: " << *bufFuncAddrS << endl;
+    }
+
+    // rva，指向名字的地址 的数组
+    cout << "func name count: " << pExportDirectory->NumberOfNames << endl;
+    pExportDirectory->AddressOfNames;
+    DWORD* bufNameAddrS = (DWORD*)(bufPhyFile + (pExportDirectory->AddressOfNames + offset));
+    WORD* bufOrdinalS = (WORD*)(bufPhyFile + (pExportDirectory->AddressOfNameOrdinals + offset));
+    for(int i = 0;i< pExportDirectory->NumberOfNames;i++, bufNameAddrS++, bufOrdinalS++) {
+        char* buf = bufPhyFile + (*bufNameAddrS + offset);
+        cout << "func name: " << buf <<", ordinal: "<< *bufOrdinalS << endl;;
+    }
+    
+    // rva，指向函数名 对应序号 的地址 的数组
+    pExportDirectory->AddressOfNameOrdinals;
+    
+    return true;
+}
+
+bool checkImport(char* bufPhyFile, DWORD importSectionRVA, IMAGE_SECTION_HEADER * sections, int index) {
+    if (index < 0) {
+        return false;
+    }
+    cout << endl;
+
+    IMAGE_SECTION_HEADER section = sections[index];
     DWORD offset = offsetPhyToVa(section);
     char* bufPhyImportDescriptor = bufPhyFile + importSectionRVA + offset;
 
@@ -345,12 +391,20 @@ void parseFile(unique_ptr<char[]> fileBuf) {
         return;
     }
 
-    checkDebug(fileBuf.get(), resourceRVA, sectionHeaders[resSectionIndex] );
+    checkDebug(fileBuf.get(), resourceRVA, sectionHeaders, resSectionIndex );
+   ///
+    DWORD exportSectionRVA = ntHead32.OptionalHeader.DataDirectory[0].VirtualAddress;
+    int exportSectionIndex = findSectionHeader(exportSectionRVA, sectionHeaders, numberOfSections);
 
+    checkExport(fileBuf.get(), exportSectionRVA, sectionHeaders, exportSectionIndex);
+
+    //
     DWORD importSectionRVA = ntHead32.OptionalHeader.DataDirectory[1].VirtualAddress;
     int importSectionIndex = findSectionHeader(importSectionRVA, sectionHeaders, numberOfSections);
 
-    checkImport(fileBuf.get(), importSectionRVA, sectionHeaders[importSectionIndex]);
+    checkImport(fileBuf.get(), importSectionRVA, sectionHeaders, importSectionIndex);
+
+ 
 }
 
 int main(int n, char **argv)
@@ -361,8 +415,9 @@ int main(int n, char **argv)
         sIn = argv[1];
     }
     else {
-       sIn = "C:\\fx\\code\\my\\pe_parse\\pe_parse\\peParse\\Debug\\peParse1.exe";
-        //getline(cin, sIn, '\n');
+        sIn = "C:\\Users\\ff\\source\\repos\\Dll1\\Debug\\Dll1.dll";
+       //sIn = "C:\\fx\\code\\my\\pe_parse\\pe_parse\\peParse\\Debug\\peParse1.exe";
+       // getline(cin, sIn, '\n');
     }
 
     std::cout << sIn << std::endl;
